@@ -27,6 +27,11 @@ from ..create_format_map_from_package import create_format_map_from_package
 logger = logging.getLogger('rosdoc2')
 
 
+def esc_backslash(path):
+    """Escape backslashes to support Windows paths in strings."""
+    return path.replace('\\', '\\\\') if path else path
+
+
 def generate_package_toc_entry(*, build_context) -> str:
     """Construct a table of content (toc) entry for the package being processed."""
     build_type = build_context.build_type
@@ -90,7 +95,7 @@ always_run_doxygen = {always_run_doxygen}
 # By default, the `exhale`/`breathe` extensions should be added if `doxygen` was invoked
 is_doxygen_invoked = build_type in ('ament_cmake', 'cmake') or always_run_doxygen
 
-if rosdoc2_settings.get('enable_breathe', is_doxygen_invoked):
+if rosdoc2_settings.get('enable_breathe', False):
     # Configure Breathe.
     # Breathe ingests the XML output from Doxygen and makes it accessible from Sphinx.
     print('[rosdoc2] enabling breathe', file=sys.stderr)
@@ -107,7 +112,7 @@ if rosdoc2_settings.get('enable_breathe', is_doxygen_invoked):
         extensions.append('breathe')
         breathe_default_project = next(iter(breathe_projects.keys()))
 
-if rosdoc2_settings.get('enable_exhale', is_doxygen_invoked):
+if rosdoc2_settings.get('enable_exhale', False):
     # Configure Exhale.
     # Exhale uses the output of Doxygen and Breathe to create easier to browse pages
     # for classes and functions documented with Doxygen.
@@ -149,7 +154,7 @@ if rosdoc2_settings.get('enable_exhale', is_doxygen_invoked):
         "exhaleExecutesDoxygen": False,
         # Maps markdown files to the "md" lexer, and not the "markdown" lexer
         # Pygments registers "md" as a valid markdown lexer, and not "markdown"
-        "lexerMapping": {{r".*\.(md|markdown)$": "md",}},
+        "lexerMapping": {{r".*\\.(md|markdown)$": "md",}},
         "customSpecificationsMapping": utils.makeCustomSpecificationsMapping(
             lambda kind: exhale_specs_mapping.get(kind, [])),
     }})
@@ -192,9 +197,9 @@ default_conf_py_template = """\
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join('{package_src_directory}', '..')))
 
 
 # -- Project information -----------------------------------------------------
@@ -394,6 +399,26 @@ class SphinxBuilder(Builder):
                     f"Error the 'doxygen_xml_directory' specified "
                     f"'{self.doxygen_xml_directory}' does not exist.")
 
+        package_xml_directory = os.path.dirname(self.build_context.package.filename)
+        # If 'python_source' is specified, construct 'package_src_directory' from it
+        if self.build_context.python_source is not None:
+            package_src_directory = \
+                os.path.abspath(
+                    os.path.join(
+                        package_xml_directory,
+                        self.build_context.python_source))
+        # If not provided, try to find the package source direcotry
+        else:
+            package_list = setuptools.find_packages(where=package_xml_directory)
+            if self.build_context.package.name in package_list:
+                package_src_directory = \
+                    os.path.abspath(
+                        os.path.join(
+                            package_xml_directory,
+                            self.build_context.package.name))
+            else:
+                package_src_directory = None
+
         # Check if the user provided a sourcedir.
         sourcedir = self.sphinx_sourcedir
         if sourcedir is not None:
@@ -416,7 +441,7 @@ class SphinxBuilder(Builder):
                     'Note: no sourcedir provided by the user and no Sphinx sourcedir was found '
                     'in the standard locations, therefore using a default Sphinx configuration.')
                 sourcedir = os.path.join(doc_build_folder, 'default_sphinx_project')
-                self.generate_default_project_into_directory(sourcedir)
+                self.generate_default_project_into_directory(sourcedir, package_src_directory)
 
         # Collect intersphinx mapping extensions from discovered inventory files.
         inventory_files = \
@@ -425,31 +450,11 @@ class SphinxBuilder(Builder):
         intersphinx_mapping_extensions = [
             f"'{package_name}': "
             f"('{base_url}/{package_name}/{inventory_dict['location_data']['relative_root']}', "
-            f"'{os.path.abspath(inventory_dict['inventory_file'])}')"
+            f"'{esc_backslash(os.path.abspath(inventory_dict['inventory_file']))}')"
             for package_name, inventory_dict in inventory_files.items()
             # Exclude ourselves.
             if package_name != self.build_context.package.name
         ]
-
-        package_xml_directory = os.path.dirname(self.build_context.package.filename)
-        # If 'python_source' is specified, construct 'package_src_directory' from it
-        if self.build_context.python_source is not None:
-            package_src_directory = \
-                os.path.abspath(
-                    os.path.join(
-                        package_xml_directory,
-                        self.build_context.python_source))
-        # If not provided, try to find the package source direcotry
-        else:
-            package_list = setuptools.find_packages(where=package_xml_directory)
-            if self.build_context.package.name in package_list:
-                package_src_directory = \
-                    os.path.abspath(
-                        os.path.join(
-                            package_xml_directory,
-                            self.build_context.package.name))
-            else:
-                package_src_directory = None
 
         # Setup rosdoc2 Sphinx file which will include and extend the one in `sourcedir`.
         self.generate_wrapping_rosdoc2_sphinx_project_into_directory(
@@ -555,13 +560,14 @@ class SphinxBuilder(Builder):
                 return option
         return None
 
-    def generate_default_project_into_directory(self, directory):
+    def generate_default_project_into_directory(self, directory, package_src_directory):
         """Generate the default project configuration files."""
         os.makedirs(directory, exist_ok=True)
 
         package = self.build_context.package
         template_variables = {
             'package': package,
+            'package_src_directory': esc_backslash(package_src_directory),
             'package_version_short': '.'.join(package.version.split('.')[0:2]),
             'package_licenses': ', '.join(package.licenses),
             'package_authors': ', '.join(set(
@@ -590,21 +596,35 @@ class SphinxBuilder(Builder):
         intersphinx_mapping_extensions,
     ):
         """Generate the rosdoc2 sphinx project configuration files."""
+        # sloretz
+        # Copy all user content, like images or documentation files, to the wrapping directory
+        if user_sourcedir:
+            print(f"Copying user content from {user_sourcedir} to {directory}. Pkg src dir: {package_src_directory}")
+            shutil.copytree(
+                os.path.abspath(user_sourcedir),
+                os.path.abspath(directory),
+                dirs_exist_ok=True)
+            shutil.copytree(
+                os.path.abspath(package_src_directory),
+                os.path.abspath(directory),
+                dirs_exist_ok=True)
         os.makedirs(directory, exist_ok=True)
 
         package = self.build_context.package
         breathe_projects = []
         if self.doxygen_xml_directory is not None:
             breathe_projects.append(
-                f'        "{package.name} Doxygen Project": "{self.doxygen_xml_directory}"')
+                f'        "{package.name} Doxygen Project": '
+                f'"{esc_backslash(self.doxygen_xml_directory)}"')
         template_variables = {
             'package_name': package.name,
             'package_src_directory': package_src_directory,
             'exec_depends': [exec_depend.name for exec_depend in package.exec_depends],
             'build_type': self.build_context.build_type,
             'always_run_doxygen': self.build_context.always_run_doxygen,
-            'user_sourcedir': os.path.abspath(user_sourcedir),
-            'user_conf_py_filename': os.path.abspath(os.path.join(user_sourcedir, 'conf.py')),
+            'user_sourcedir': esc_backslash(os.path.abspath(user_sourcedir)),
+            'user_conf_py_filename': esc_backslash(
+                os.path.abspath(os.path.join(user_sourcedir, 'conf.py'))),
             'breathe_projects': ',\n'.join(breathe_projects) + '\n    ',
             'intersphinx_mapping_extensions': ',\n        '.join(intersphinx_mapping_extensions)
         }
