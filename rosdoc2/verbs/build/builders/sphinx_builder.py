@@ -606,14 +606,17 @@ class SphinxBuilder(Builder):
         # Copy all user content, like images or documentation files, to the wrapping directory
         if user_sourcedir:
             print(f"Copying user content from {user_sourcedir} to {directory}. Pkg src dir: {package_src_directory}")
-            shutil.copytree(
-                os.path.abspath(user_sourcedir),
-                os.path.abspath(directory),
-                dirs_exist_ok=True)
-            shutil.copytree(
-                os.path.abspath(package_src_directory),
-                os.path.abspath(directory),
-                dirs_exist_ok=True)
+            try:
+                shutil.copytree(
+                    os.path.abspath(user_sourcedir),
+                    os.path.abspath(directory),
+                    dirs_exist_ok=True)
+                shutil.copytree(
+                    os.path.abspath(package_src_directory),
+                    os.path.abspath(directory),
+                    dirs_exist_ok=True)
+            except OSError as e:
+                print(f"Failed to copy user content: {e}")
         os.makedirs(directory, exist_ok=True)
 
         package = self.build_context.package
