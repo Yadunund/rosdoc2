@@ -100,7 +100,7 @@ always_run_doxygen = {always_run_doxygen}
 # By default, the `exhale`/`breathe` extensions should be added if `doxygen` was invoked
 is_doxygen_invoked = build_type in ('ament_cmake', 'cmake') or always_run_doxygen
 
-if rosdoc2_settings.get('enable_breathe', False):
+if rosdoc2_settings.get('enable_breathe', is_doxygen_invoked):
     # Configure Breathe.
     # Breathe ingests the XML output from Doxygen and makes it accessible from Sphinx.
     print('[rosdoc2] enabling breathe', file=sys.stderr)
@@ -117,7 +117,7 @@ if rosdoc2_settings.get('enable_breathe', False):
         extensions.append('breathe')
         breathe_default_project = next(iter(breathe_projects.keys()))
 
-if rosdoc2_settings.get('enable_exhale', False):
+if rosdoc2_settings.get('enable_exhale', is_doxygen_invoked):
     # Configure Exhale.
     # Exhale uses the output of Doxygen and Breathe to create easier to browse pages
     # for classes and functions documented with Doxygen.
@@ -392,6 +392,7 @@ class SphinxBuilder(Builder):
     def build(self, *, doc_build_folder, output_staging_directory):
         """Actually do the build."""
         # Check that doxygen_xml_directory exists relative to output staging, if specified.
+        print("Running sphinx_builder...")
         should_run_doxygen = \
             self.build_context.build_type in ('ament_cmake', 'cmake') or \
             self.build_context.always_run_doxygen
